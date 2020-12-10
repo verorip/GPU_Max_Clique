@@ -14,10 +14,10 @@
 
 
 
-constexpr int N = 30;
+constexpr int N = 500;
 constexpr int RATE = 30;
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
-constexpr int flag = 1;
+constexpr int flag = 2;
 
 //per sincronizzare eseguo atomicexec()
 __device__ int d_best_size[N];
@@ -170,13 +170,13 @@ int main() {
 
     int f = 0;
     int count = 0;
-    for (int i = 0; i < indexes.size(); i++) {
+   /* for (int i = 0; i < indexes.size(); i++) {
         for (int j = 0; j < degrees[i]; j++) {
             std::cout << neighbours[indexes[i]+j] << ' ';
         }
         std::cout << "  //  ";
     }
-    std::cout << '\n';
+    std::cout << '\n';*/
 
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     
@@ -209,14 +209,16 @@ int main() {
     }    
 }
 
-/*__device__*/ int parallel_intersection(int *arr1, int *arr2, int x, int y, int *p) {
+/*__device__*/ int * parallel_intersection(int *arr1, int *arr2, int x, int y, int *count) {
     int* tmp;
+    int* p= nullptr;
     if (y > x)
         tmp = new int[x];
     else
         tmp = new int[y];
     //int* tmp = new int[y ^ ((x ^ y) & -(x < y))];
-    int i = 0, j = 0, count = 0;
+    int i = 0, j = 0;
+    *count = 0;
     while (i < x && j < y) {
         if (arr1[i] < arr2[j])
             i++;
@@ -224,30 +226,30 @@ int main() {
             j++;
         else /* if arr1[i] == arr2[j] */
         {
-            tmp[count] = arr1[i];
+            tmp[*count] = arr1[i];
             i++;
             j++;
-            count++;
+            (*count)++;
         }
     }
-    p = new int[count];
-    for (int k = 0; k < count; k++) {
-        p[k] = tmp[k];
-    }
+    if (*count > 0) {
+        p = new int[*count];
+        for (int k = 0; k < *count; k++) {
+            p[k] = tmp[k];
+        }
+    }   
     delete[] tmp;
-    return count;
-
+    return p;
 }
 
 /*__device__*/ void rec_paral(int* dev_degrees, int* dev_neighbours, int* dev_indexes, int* intersection, int inter_size, int *tmp, int tmp_indexes, int current, int global_idx) {
-    int* next_inter = new int[0];
+    int* next_inter = nullptr;
     int size=0, i = 0;
     deepest[global_idx] = tmp_indexes;
     while (i < inter_size) {
-        size = parallel_intersection(intersection, &dev_neighbours[dev_indexes[intersection[i]]], inter_size, dev_degrees[current], next_inter);
+        next_inter = parallel_intersection(intersection, &(dev_neighbours[dev_indexes[intersection[i]]]), inter_size, dev_degrees[current], &size);
         tmp[tmp_indexes] = intersection[i];
-        if(tmp_indexes<2)
-            rec_paral(dev_degrees, dev_neighbours, dev_indexes, next_inter, size, tmp, tmp_indexes+1, intersection[i], global_idx);
+        rec_paral(dev_degrees, dev_neighbours, dev_indexes, next_inter, size, tmp, tmp_indexes+1, intersection[i], global_idx);
         i++;
     }
     
@@ -304,7 +306,7 @@ cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<i
         tmp[i] = -1;
     }
     int* n = (int*)malloc(neighbours.size() * sizeof(int));
-    cudaError_t cudaStatus;
+    cudaError_t cudaStatus = cudaSuccess;
 
     for (int i = 0; i < N; i++) {
         d[i] = degrees[i];
@@ -314,6 +316,17 @@ cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<i
         n[i] = neighbours[i];
     }
     paral_max_clique(d, n,in, 0);
+    printf("\n");
+    
+    printf("%d -> ", d_best_size[0]);
+    
+    printf("\n\n");
+    for (int i = 0; i < d_best_size[0]; i++) {
+        if (i % N == 0)
+            printf("  ||  ");
+        printf("%d ->", dev_max_clique[i]);
+        
+    }
     /*
     cudaStatus = cudaMalloc((void**)&dev_degrees, N * sizeof(int));
     if (cudaStatus != cudaSuccess) {
