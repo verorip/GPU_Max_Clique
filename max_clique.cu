@@ -14,10 +14,10 @@
 
 
 
-constexpr int N = 500;
+constexpr int N = 128;
 constexpr int RATE = 45;
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
-constexpr int flag = 2;
+constexpr int flag = 1;
 
 //per sincronizzare eseguo atomicexec()
 __device__ int d_best_size[N];
@@ -27,7 +27,7 @@ __device__ int dev_max_clique[N * N];
 cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes);
 
 
-void rec_seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, std::deque<int> &intersection,const std::vector<int>&indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size, int tmp_index, int current) {
+__host__ void rec_seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, std::deque<int> &intersection,const std::vector<int>&indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size, int tmp_index, int current) {
     int crt;
     std::deque<int> local_neight(degrees[current]);
     
@@ -67,7 +67,7 @@ void rec_seq_clique(const std::vector<int> &degrees, const std::vector<int>&neig
 }
 
 //codice sequenziale
-void seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, const std::vector<int> &indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size) {
+__host__ void seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, const std::vector<int> &indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size) {
     best_size = 0;
     for (int i = 0; i < N; i++) {
         tmp[0] = i;
@@ -77,7 +77,7 @@ void seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbou
     }
 }
 
-std::vector<int> create_graph(std::vector<int>& degrees, int MaxNeightbours) {
+__host__ std::vector<int> create_graph(std::vector<int>& degrees, int MaxNeightbours) {
     std::vector<int> temp_neighbours(N * MaxNeightbours);
 
     int sizeOfN = 0;
@@ -206,7 +206,7 @@ int main() {
     }    
 }
 
-/*__device__*/ int * parallel_intersection(int *arr1, int *arr2, int x, int y, int *count) {
+__device__ int * parallel_intersection(int *arr1, int *arr2, int x, int y, int *count) {
     int* tmp;
     /*if (y > x)
         tmp = new int[x];
@@ -246,14 +246,15 @@ int main() {
     return p;
 }
 
-/*__device__*/ void rec_paral(int* dev_degrees, int* dev_neighbours, int* dev_indexes, int* intersection, int inter_size, int *tmp, int tmp_indexes, int current, int global_idx, int *local_max, int *to_ret) {
+__device__ void rec_paral(int* dev_degrees, int* dev_neighbours, int* dev_indexes, int* intersection, int inter_size, int *tmp, int tmp_indexes, int current, int global_idx, int *local_max, int *to_ret) {
     
     int* next_inter = nullptr;
     int size=0, i = 0;
     while (i < inter_size && (*local_max) < inter_size - i + tmp_indexes) {
         next_inter = parallel_intersection(intersection, &(dev_neighbours[dev_indexes[intersection[i]]]), inter_size, dev_degrees[current], &size);
         tmp[tmp_indexes] = intersection[i];
-        rec_paral(dev_degrees, dev_neighbours, dev_indexes, next_inter, size, tmp, tmp_indexes+1, intersection[i], global_idx, local_max, to_ret);
+        if(size+tmp_indexes+1>*local_max)
+            rec_paral(dev_degrees, dev_neighbours, dev_indexes, next_inter, size, tmp, tmp_indexes+1, intersection[i], global_idx, local_max, to_ret);
         i++;
     }
     
@@ -269,9 +270,9 @@ int main() {
 }
 
 
-/*__global__*/ void paral_max_clique(int *dev_degrees,int *dev_neighbours, int* dev_indexes)
+__global__ void paral_max_clique(int *dev_degrees,int *dev_neighbours, int* dev_indexes)
 {
-    int global_idx = 0;//blockIdx.x * blockDim.x + threadIdx.x;
+    int global_idx =blockIdx.x * blockDim.x + threadIdx.x;
     int *tmp = new int[N];
     int* to_ret = new int[N];
     tmp[0] = global_idx;
@@ -293,25 +294,69 @@ int main() {
 //qui eseguirò il codice parallelo
 cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes)
 {
-    //int to_ret[N*N] = { -1 };
+    cudaError_t cudaStatus = cudaSuccess;
+    size_t p;
+    cudaStatus = cudaDeviceGetLimit(&p, cudaLimitStackSize);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaggetlimit failed!", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+    std::cout << p << std::endl;
+    p = p*5;
+    cudaStatus = cudaDeviceSetLimit(cudaLimitStackSize, p);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudasetlimit failed!", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+    cudaStatus = cudaDeviceGetLimit(&p, cudaLimitMallocHeapSize);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaggetlimit failed!", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+    std::cout << p << std::endl;
+    p=p * 5;
+    cudaStatus = cudaDeviceSetLimit(cudaLimitMallocHeapSize, p);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudasetlimit failed!", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+    cudaDeviceProp div;
+    cudaStatus = cudaGetDeviceProperties(&div, 0);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudagetproperties failed!", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+    std::cout << div.name << std::endl;
+    
+    printf("\n\n");
+
+    cudaStatus = cudaSetDevice(0);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudagetproperties failed!", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+
+    //return cudaStatus;
+
+    int *to_ret = new int[N*N];
     int *dev_degrees;
     int *dev_indexes;
     int* dev_neighbours;
-    //int tmp[N];
+    int* tmp = new int[N];
     int sz = (int)neighbours.size();
     int d[N];
     int in[N];
     int i = 0, out = 0, max=0;
     std::chrono::steady_clock::time_point begin, end;
     std::chrono::duration<float, std::milli> ms;
-   /* for (int i = 0; i < N * N; i++) {
+   for (int i = 0; i < N * N; i++) {
         to_ret[i] = -1;
     }
     for (int i = 0; i < N; i++) {
         tmp[i] = -1;
-    }*/
+    }
     int* n = (int*)malloc(neighbours.size() * sizeof(int));
-    cudaError_t cudaStatus= cudaSuccess;
+   
 
     for (int i = 0; i < N; i++) {
         d[i] = degrees[i];
@@ -320,31 +365,17 @@ cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<i
     for (int i = 0; i < (int) neighbours.size(); i++) {
         n[i] = neighbours[i];
     }
-    begin = std::chrono::steady_clock::now();
+    /*begin = std::chrono::steady_clock::now();
     paral_max_clique(d, n, in);
-    printf("finito\n");
-    /*
+    printf("finito\n");*/
+    
     cudaStatus = cudaMalloc((void**)&dev_degrees, N * sizeof(int));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!", cudaGetErrorString(cudaStatus));
         goto Error;
     }
 
-    cudaStatus = cudaMalloc((void**)&d_best_size, N * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!", cudaGetErrorString(cudaStatus));
-        goto Error;
-    }
-
-
-    cudaStatus = cudaMalloc((void**)&dev_max_clique, N*N * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!", cudaGetErrorString(cudaStatus));
-        goto Error;
-    }
-
-    
-    cudaStatus = cudaMalloc((void**)&dev_neighbours, neighbours.size() * sizeof(int));
+    cudaStatus = cudaMalloc((void**)&dev_neighbours, ((int)neighbours.size()) * sizeof(int));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!", cudaGetErrorString(cudaStatus));
         goto Error;
@@ -386,9 +417,9 @@ cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<i
         goto Error;
     }
     printf("\n\navvio kernel\n\n ");
-    begin = std::chrono::steady_clock::now();
+    
     //qua lancio il kernel
-    paral_max_clique<<<1, 1>>> (dev_degrees, dev_neighbours, dev_indexes, sz);
+    paral_max_clique<<<1,2>>> (dev_degrees, dev_neighbours, dev_indexes);
     
     //controllo errori nel lancio dle kernel
     cudaStatus = cudaGetLastError();
@@ -396,18 +427,18 @@ cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<i
         fprintf(stderr, "max_clique_parallel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Error;
     }
-
+    begin = std::chrono::steady_clock::now();
     // cudaDeviceSynchronize waits for the kernel to finish, and returns
     // any errors encountered during the launch.
     cudaStatus = cudaDeviceSynchronize();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n %s\n", cudaStatus, cudaGetErrorString(cudaStatus));
         goto Error;
-    }*/
+    }
     end = std::chrono::steady_clock::now();
     ms = end - begin;
     std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
-    /*
+    
     cudaStatus = cudaMemcpyFromSymbol(to_ret, dev_max_clique, N * N * sizeof(int));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpyFromSymbol failed!");
@@ -422,31 +453,31 @@ cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<i
     for (i = 0; i < N; i++) {
         printf("%d -> ", tmp[i]);
     }
-    i = 0;
+    i = 1;
     out = 0;
     max = 0;
-    while (i < N && out == 0) {
-        max = tmp[i] > max ? i : max;
+    while (i < N) {
+        max = tmp[i] > tmp[max] ? i : max;
         i++;
     }
     
     printf("\n clique:\n");
     for (i = 0; i < tmp[max]; i++) {
 
-        printf("%d -> ", to_ret[(N*max)+i]);
+        printf("%d -> ", to_ret[max + i*N]);
     }
 
 Error:
-    cudaFree(d_best_size);
-    cudaFree(dev_max_clique);
     cudaFree(dev_degrees);
     cudaFree(dev_neighbours);
-    cudaFree(dev_indexes);*/
+    cudaFree(dev_indexes);
     free(n);
-    printf("\n");
+    delete[] tmp;
+    delete[] to_ret;
+    /*printf("\n");
     for (int i = 0; i < d_best_size[0]; i++) {
         printf("%d -> ", dev_max_clique[N*i]);
-    }
+    }*/
     return cudaStatus;
 }
 
