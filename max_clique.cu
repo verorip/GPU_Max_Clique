@@ -16,7 +16,7 @@
 #include <thrust/execution_policy.h>
 
 
-constexpr int N = 50;
+constexpr int N = 100;
 constexpr int RATE = 45;
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
 constexpr int flag = 1;
@@ -28,7 +28,7 @@ constexpr int flag = 1;
 cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes);
 
 
-__host__ void rec_seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, std::deque<int> &intersection,const std::vector<int>&indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size, int tmp_index, int current) {
+void rec_seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, std::deque<int> &intersection,const std::vector<int>&indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size, int tmp_index, int current) {
     int crt;
     std::deque<int> local_neight(degrees[current]);
     
@@ -68,7 +68,7 @@ __host__ void rec_seq_clique(const std::vector<int> &degrees, const std::vector<
 }
 
 //codice sequenziale
-__host__ void seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, const std::vector<int> &indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size) {
+void seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, const std::vector<int> &indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size) {
     best_size = 0;
     for (int i = 0; i < N; i++) {
         tmp[0] = i;
@@ -211,22 +211,24 @@ int main() {
 
 void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, thrust::host_vector<int>& intersection, const std::vector<int>& indexes, std::array<int, N>& tmp, int &best_size, int tmp_index, int current, thrust::device_vector<int>& to_ret){
     //std::deque<int> inters_local;
-    thrust::host_vector<int>::iterator r;
-    thrust::host_vector<int> intersection_local(degrees[current]<=intersection.size()? degrees[current] : intersection.size(), -1);
+    thrust::device_vector<int>::iterator r;
+    thrust::device_vector<int> inter_tmp(degrees[current] <= intersection.size() ? degrees[current] : intersection.size(), -1);
+    thrust::device_vector<int> a(intersection.begin(), intersection.end()), b(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
+    thrust::host_vector<int> intersection_local;
     if (tmp_index > 1) {
-        r=thrust::set_intersection(intersection.begin(), intersection.end(), neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current], intersection_local.begin());
-        //std::cout << "test   " << test;
-        //inters_local = std::deque<int>(intersection_local.begin(), intersection_local.end());
+        r=thrust::set_intersection( a.begin(), a.end(),b.begin(), b.end(), inter_tmp.begin());
+        intersection_local = thrust::host_vector<int>((int)(r - inter_tmp.begin()));
+        thrust::copy(inter_tmp.begin(), r, intersection_local.begin());
     }
     else {
         //inters_local = std::deque<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
         intersection_local = thrust::host_vector<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
-        r = intersection_local.end();
+        
     }
     int i = 0;
     //int d_t = thrust::distance(intersection_local.begin(),r);
-    int d = r - intersection_local.begin();
-    while (i<d && d + tmp_index > best_size && intersection_local[i]!=-1) {
+    int d = intersection_local.size();
+    while (i<d && d + tmp_index > best_size) {
 
         //crt = intersection_local[i];
         tmp[tmp_index] = intersection_local[i];
@@ -238,12 +240,6 @@ void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& nei
         best_size = tmp_index;
         thrust::device_vector<int> t(tmp.begin(), tmp.begin()+tmp_index);
         thrust::copy(thrust::device, t.begin(), t.end(), to_ret.begin());
-        /*for (int i = 0; i < N; i++) {
-            if (i <= tmp_index)
-                dev_max_clique[i] = tmp[i];
-            else
-                dev_max_clique[i] = -1;
-        }*/
     }
 }
 
