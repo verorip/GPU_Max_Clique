@@ -16,8 +16,8 @@
 #include <thrust/execution_policy.h>
 
 
-constexpr int N = 100;
-constexpr int RATE = 45;
+constexpr int N = 2000;
+constexpr int RATE = 10;
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
 constexpr int flag = 1;
 
@@ -27,6 +27,24 @@ constexpr int flag = 1;
 
 cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes);
 
+void seq_intersection(std::deque<int>& intersection, std::deque<int>& local_neight, std::deque<int> &inters_local) {
+    int i = 0, j = 0, count = 0;
+    std::deque<int> tmp(std::min(intersection.size(), local_neight.size()));
+    while (i < intersection.size() && j < local_neight.size()) {
+        if (intersection[i] < local_neight[j])
+            i++;
+        else if (local_neight[j] < intersection[i])
+            j++;
+        else
+        {
+            tmp[count] = local_neight[j];
+            j++;
+            i++;
+            count++;
+        }
+        inters_local = std::deque<int>(tmp.begin(), tmp.begin() + count);
+    }
+}
 
 void rec_seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, std::deque<int> &intersection,const std::vector<int>&indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size, int tmp_index, int current) {
     int crt;
@@ -40,9 +58,10 @@ void rec_seq_clique(const std::vector<int> &degrees, const std::vector<int>&neig
     std::sort(local_neight.begin(), local_neight.end());
     std::deque<int> inters_local;
     if (tmp_index > 1) {
-        std::set_intersection(intersection.begin(), intersection.end(),
+        /*std::set_intersection(intersection.begin(), intersection.end(),
             local_neight.begin(), local_neight.end(),
-            back_inserter(inters_local));
+            back_inserter(inters_local));*/
+        seq_intersection(intersection, local_neight, inters_local);
     }
     else{
         inters_local = local_neight;
@@ -211,23 +230,19 @@ int main() {
 
 void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, thrust::host_vector<int>& intersection, const std::vector<int>& indexes, std::array<int, N>& tmp, int &best_size, int tmp_index, int current, thrust::device_vector<int>& to_ret){
     //std::deque<int> inters_local;
-    thrust::device_vector<int>::iterator r;
-    thrust::device_vector<int> inter_tmp(degrees[current] <= intersection.size() ? degrees[current] : intersection.size(), -1);
-    thrust::device_vector<int> a(intersection.begin(), intersection.end()), b(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
-    thrust::host_vector<int> intersection_local;
+    thrust::host_vector<int>::iterator r;
+    thrust::host_vector<int> intersection_local(degrees[current]<=intersection.size()? degrees[current] : intersection.size(), -1);
     if (tmp_index > 1) {
-        r=thrust::set_intersection( a.begin(), a.end(),b.begin(), b.end(), inter_tmp.begin());
-        intersection_local = thrust::host_vector<int>((int)(r - inter_tmp.begin()));
-        thrust::copy(inter_tmp.begin(), r, intersection_local.begin());
+        r=thrust::set_intersection(intersection.begin(), intersection.end(), neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current], intersection_local.begin());
     }
     else {
         //inters_local = std::deque<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
         intersection_local = thrust::host_vector<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
-        
+        r = intersection_local.end();
     }
     int i = 0;
     //int d_t = thrust::distance(intersection_local.begin(),r);
-    int d = intersection_local.size();
+    int d = r - intersection_local.begin();
     while (i<d && d + tmp_index > best_size) {
 
         //crt = intersection_local[i];
@@ -254,7 +269,7 @@ void parallel_clique(const std::vector<int>& degrees, const std::vector<int>& ne
 }
 
 //qui eseguirò il codice parallelo
-__host__ cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes)
+cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes)
 {
     cudaError_t cudaStatus = cudaSuccess;
 
@@ -269,12 +284,13 @@ __host__ cudaError_t clique_launcher(const std::vector<int>& degrees, const std:
     parallel_clique(degrees, neighbours, indexes, tmp, d_best_size, dev_max_clique);
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     std::chrono::duration<float, std::milli> ms = end - begin;
-    std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
+    
     printf("\n clique seq lunga %d: \n", d_best_size);
     thrust::copy(dev_max_clique.begin(), dev_max_clique.begin()+d_best_size, std::ostream_iterator<int>(std::cout, "--> "));
     /*for (int i = 0; i < d_best_size; i++) {
         printf("%d -> ", dev_max_clique[i]);
     }*/
+    std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
     return cudaStatus;
 }
 
