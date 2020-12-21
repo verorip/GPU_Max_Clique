@@ -12,15 +12,16 @@
 #include <time.h>
 #include <chrono>
 #include <thrust/copy.h>
+#include <thrust/set_operations.h>
+#include <thrust/execution_policy.h>
 
 
-
-constexpr int N = 128;
+constexpr int N = 50;
 constexpr int RATE = 45;
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
 constexpr int flag = 1;
 
-thrust::device_vector<int> dev_max_clique(N, -1);
+
 
 
 
@@ -208,16 +209,50 @@ int main() {
 }
 
 
-void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, std::deque<int>& intersection, const std::vector<int>& indexes, std::array<int, N>& tmp, int& best_size, int tmp_index, int current){
+void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, thrust::host_vector<int>& intersection, const std::vector<int>& indexes, std::array<int, N>& tmp, int &best_size, int tmp_index, int current, thrust::device_vector<int>& to_ret){
+    //std::deque<int> inters_local;
+    thrust::host_vector<int>::iterator r;
+    thrust::host_vector<int> intersection_local(degrees[current]<=intersection.size()? degrees[current] : intersection.size(), -1);
+    if (tmp_index > 1) {
+        r=thrust::set_intersection(intersection.begin(), intersection.end(), neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current], intersection_local.begin());
+        //std::cout << "test   " << test;
+        //inters_local = std::deque<int>(intersection_local.begin(), intersection_local.end());
+    }
+    else {
+        //inters_local = std::deque<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
+        intersection_local = thrust::host_vector<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
+        r = intersection_local.end();
+    }
+    int i = 0;
+    //int d_t = thrust::distance(intersection_local.begin(),r);
+    int d = r - intersection_local.begin();
+    while (i<d && d + tmp_index > best_size && intersection_local[i]!=-1) {
 
+        //crt = intersection_local[i];
+        tmp[tmp_index] = intersection_local[i];
+        rec_par_clique(degrees, neighbours, intersection_local, indexes, tmp, best_size, tmp_index + 1, intersection_local[i], to_ret);
+        i++;
+    }
+
+    if (tmp_index > best_size) {
+        best_size = tmp_index;
+        thrust::device_vector<int> t(tmp.begin(), tmp.begin()+tmp_index);
+        thrust::copy(thrust::device, t.begin(), t.end(), to_ret.begin());
+        /*for (int i = 0; i < N; i++) {
+            if (i <= tmp_index)
+                dev_max_clique[i] = tmp[i];
+            else
+                dev_max_clique[i] = -1;
+        }*/
+    }
 }
 
-void parallel_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes, std::array<int, N>& tmp, int& best_size) {
+void parallel_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes, std::array<int, N>& tmp, int& best_size, thrust::device_vector<int>&  to_ret) {
     best_size = 0;
     for (int i = 0; i < N; i++) {
         tmp[0] = i;
-        std::deque<int> d = std::deque<int>(0);
-        rec_par_clique(degrees, neighbours, d, indexes, tmp, best_size, 1, i);
+        thrust::host_vector<int>  d = thrust::host_vector<int>(0);
+        rec_par_clique(degrees, neighbours, d, indexes, tmp, best_size, 1, i, to_ret);
 
     }
 }
@@ -227,9 +262,23 @@ __host__ cudaError_t clique_launcher(const std::vector<int>& degrees, const std:
 {
     cudaError_t cudaStatus = cudaSuccess;
 
-    
-    int d_best_size = 1;
-    parallel_clique(degrees, neighbours, indexes, std::array<int,N>(), d_best_size);
+
+    int d_best_size = 0;
+    std::array<int, N> tmp;
+    for (int i = 0; i < N; i++) {
+        tmp[i] = -1;
+    }
+    thrust::device_vector<int> dev_max_clique(N, -1);
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    parallel_clique(degrees, neighbours, indexes, tmp, d_best_size, dev_max_clique);
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    std::chrono::duration<float, std::milli> ms = end - begin;
+    std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
+    printf("\n clique seq lunga %d: \n", d_best_size);
+    thrust::copy(dev_max_clique.begin(), dev_max_clique.begin()+d_best_size, std::ostream_iterator<int>(std::cout, "--> "));
+    /*for (int i = 0; i < d_best_size; i++) {
+        printf("%d -> ", dev_max_clique[i]);
+    }*/
     return cudaStatus;
 }
 
