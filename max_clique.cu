@@ -16,10 +16,10 @@
 #include <thrust/execution_policy.h>
 
 
-constexpr int N = 2000;
-constexpr int RATE = 10;
+constexpr int N = 20000;
+constexpr int RATE = 2;
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
-constexpr int flag = 1;
+constexpr int flag = 2;
 
 
 
@@ -49,7 +49,6 @@ void seq_intersection(std::deque<int>& intersection, std::deque<int>& local_neig
 void rec_seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbours, std::deque<int> &intersection,const std::vector<int>&indexes, std::array<int, N> &max_clique_seq, std::array<int,N> &tmp, int &best_size, int tmp_index, int current) {
     int crt;
     std::deque<int> local_neight(degrees[current]);
-    
    
     
     for (int i = 0; i < degrees[current]; i++) {
@@ -58,9 +57,6 @@ void rec_seq_clique(const std::vector<int> &degrees, const std::vector<int>&neig
     std::sort(local_neight.begin(), local_neight.end());
     std::deque<int> inters_local;
     if (tmp_index > 1) {
-        /*std::set_intersection(intersection.begin(), intersection.end(),
-            local_neight.begin(), local_neight.end(),
-            back_inserter(inters_local));*/
         seq_intersection(intersection, local_neight, inters_local);
     }
     else{
@@ -199,7 +195,7 @@ int main() {
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     
     if (flag <= 1) {
-        printf("\n Inizio il sequenziale: \n");
+        printf("\nInizio il sequenziale:\n");
         seq_clique(degrees, neighbours, indexes, max_clique_seq, tmp_max_clique_seq, best_size);
         printf("\n clique seq lunga %d: \n", best_size);
         for (int i = 0; i < best_size; i++) {
@@ -218,7 +214,7 @@ int main() {
     
     
     if (flag >= 1) {
-        
+        printf("\nInizio il parallelo:\n");
         cudaError_t cudaStatus = clique_launcher(degrees, neighbours, indexes);
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "kernel fail!");
