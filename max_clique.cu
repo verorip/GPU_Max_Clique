@@ -14,18 +14,22 @@
 #include <thrust/copy.h>
 #include <thrust/set_operations.h>
 #include <thrust/execution_policy.h>
+#include "device_functions.h"
 
-
-constexpr int N = 20000;
-constexpr int RATE = 2;
+constexpr int N = 32;
+constexpr int RATE = 40;
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
-constexpr int flag = 2;
+constexpr int flag = 1;
+
+
+__constant__ int a[N];
+//__device__ int b[N];
+__device__ int d_count;
+__device__ int d_n[N*N];
 
 
 
-
-
-cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes);
+cudaError_t clique_launcher(std::vector<int>& degrees, std::vector<int>& neighbours, std::vector<int>& indexes);
 
 void seq_intersection(std::deque<int>& intersection, std::deque<int>& local_neight, std::deque<int> &inters_local) {
     int i = 0, j = 0, count = 0;
@@ -224,48 +228,141 @@ int main() {
 }
 
 
-void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, thrust::host_vector<int>& intersection, const std::vector<int>& indexes, std::array<int, N>& tmp, int &best_size, int tmp_index, int current, thrust::device_vector<int>& to_ret){
-    //std::deque<int> inters_local;
-    thrust::host_vector<int>::iterator r;
-    thrust::host_vector<int> intersection_local(degrees[current]<=intersection.size()? degrees[current] : intersection.size(), -1);
+
+__global__ void parall_intersection(int n, int m,int start, int* inters_local) {
+    int idx = blockIdx.x;
+    int idy = threadIdx.x;
+    //if (idx < n && idy < m) {
+    int inter = a[idx];
+    int lcl_n= d_n[start+idy];
+    if (inter == lcl_n) {
+        int i = atomicAdd(&d_count, 1);
+        inters_local[i] = inter;
+    }
+   // }
+    
+}
+
+cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbours, std::vector<int>& intersection, std::vector<int>& indexes, std::array<int, N>& tmp, int& best_size, int tmp_index, int current, int* to_ret) {
+    cudaError_t cudaStatus = cudaSuccess;
+    std::vector<int> intersection_local;
+    int count = 0;
+    int sz = (int)intersection.size() - 1;
+    int min = std::min((int)intersection.size() - 1, degrees[current]);
     if (tmp_index > 1) {
-        r=thrust::set_intersection(intersection.begin(), intersection.end(), neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current], intersection_local.begin());
+        int* dev_c;
+        cudaStatus = cudaMemcpyToSymbol(a, &intersection[1], sz * sizeof(int));
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaMemCpyToSymbol failed! %s \n", cudaGetErrorString(cudaStatus));
+            return cudaStatus;
+        }        
+        /*cudaStatus = cudaMemcpyToSymbol(b, &neighbours[indexes[current]], degrees[current] * sizeof(int));
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaMemCpyToSymbol2 failed!");
+            return cudaStatus;
+        }*/
+        cudaStatus = cudaMemcpyToSymbol(d_count, &count, sizeof(int));
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaMemCpyToSymbol2 failed! %s \n", cudaGetErrorString(cudaStatus));
+            return cudaStatus;
+        }
+        cudaStatus = cudaMalloc((void**)&dev_c, std::min(sz - 1 , degrees[current]) * sizeof(int));
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "Cudamalloc failed!");
+            return cudaStatus;
+        }
+        int grid = sz % 32 == 0 ? sz : sz + 32 - (sz % 32);
+        int block = degrees[current] % 32 == 0 ? degrees[current] : degrees[current] + 32 - (degrees[current] % 32);
+        
+        parall_intersection <<<sz, degrees[current] >>> (sz,
+            degrees[current],
+            neighbours[indexes[current]],
+            dev_c);
+        // Check for any errors launching the kernel
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "Kernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+            return cudaStatus;
+        }
+
+        // cudaDeviceSynchronize waits for the kernel to finish, and returns
+        // any errors encountered during the launch.
+        cudaStatus = cudaDeviceSynchronize();
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "\ncudaDeviceSynchronize returned error code %d after launching Kernel!  %s \n", cudaStatus, cudaGetErrorString(cudaStatus));
+            return cudaStatus;
+        }
+
+        cudaStatus = cudaMemcpyFromSymbol(&count, d_count, sizeof(int));
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaMemCpyFROMSymbol failed! %s \n", cudaGetErrorString(cudaStatus));
+            return cudaStatus;
+        }
+        if (count > 0) {
+            intersection_local = std::vector<int>(count+1);
+
+            cudaStatus = cudaMemcpy(&intersection_local[0], dev_c, count * sizeof(int), cudaMemcpyDeviceToHost);
+            if (cudaStatus != cudaSuccess) {
+                fprintf(stderr, "cudaMemCpyFROMSymbol2 failed!\n %s", cudaGetErrorString(cudaStatus));
+                return cudaStatus;
+            }
+        }
+        cudaFree(dev_c);
     }
     else {
-        //inters_local = std::deque<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
-        intersection_local = thrust::host_vector<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
-        r = intersection_local.end();
+        intersection_local = std::vector<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
+        count = intersection_local.size();
     }
-    int i = 0;
-    //int d_t = thrust::distance(intersection_local.begin(),r);
-    int d = r - intersection_local.begin();
-    while (i<d && d + tmp_index > best_size) {
-
-        //crt = intersection_local[i];
+    int i=0;
+    while (i<count-1  && count + tmp_index > best_size) {
+        
         tmp[tmp_index] = intersection_local[i];
-        rec_par_clique(degrees, neighbours, intersection_local, indexes, tmp, best_size, tmp_index + 1, intersection_local[i], to_ret);
+        cudaStatus = rec_par_clique(degrees, neighbours, intersection_local, indexes, tmp, best_size, tmp_index + 1, intersection_local[i], to_ret);
+        if (cudaStatus != cudaSuccess) {
+            return cudaStatus;
+        }
         i++;
     }
 
     if (tmp_index > best_size) {
         best_size = tmp_index;
-        thrust::device_vector<int> t(tmp.begin(), tmp.begin()+tmp_index);
-        thrust::copy(thrust::device, t.begin(), t.end(), to_ret.begin());
+        if(count >0)
+            tmp[tmp_index] = intersection_local[i];
+        cudaStream_t s;
+        cudaStatus = cudaStreamCreate(&s);
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaSteamCreate failed!\n");
+            return cudaStatus;
+        }
+
+        cudaMemcpyAsync(to_ret, &tmp, tmp_index * sizeof(int), cudaMemcpyHostToDevice, s);
     }
+    return cudaStatus;
 }
 
-void parallel_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes, std::array<int, N>& tmp, int& best_size, thrust::device_vector<int>&  to_ret) {
+cudaError_t parallel_clique(std::vector<int>& degrees, std::vector<int>& neighbours, std::vector<int>& indexes, std::array<int, N>& tmp, int& best_size, int*  to_ret) {
     best_size = 0;
+    cudaError_t cudaStatus = cudaSuccess;
     for (int i = 0; i < N; i++) {
         tmp[0] = i;
-        thrust::host_vector<int>  d = thrust::host_vector<int>(0);
-        rec_par_clique(degrees, neighbours, d, indexes, tmp, best_size, 1, i, to_ret);
+        std::vector<int>  d = std::vector<int>(0);
+        cudaStatus=rec_par_clique(degrees, neighbours, d, indexes, tmp, best_size, 1, i, to_ret);
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "recursive %d failed\n", i);
+            return cudaStatus;
+        }
 
     }
+    return cudaStatus;
+    
+}
+
+__global__ void parall_upd(int n) {
+    d_n[0] = n;
 }
 
 //qui eseguirò il codice parallelo
-cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes)
+cudaError_t clique_launcher(std::vector<int>& degrees, std::vector<int>& neighbours, std::vector<int>& indexes)
 {
     cudaError_t cudaStatus = cudaSuccess;
 
@@ -275,18 +372,45 @@ cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<i
     for (int i = 0; i < N; i++) {
         tmp[i] = -1;
     }
-    thrust::device_vector<int> dev_max_clique(N, -1);
+    //thrust::device_vector<int> dev_max_clique(N, -1);
+    int* dev_max_clique, *max_clique;
+    int sz = (int)neighbours.size();
+    max_clique=(int*)malloc(N * sizeof(int));
+    cudaStatus = cudaMalloc((void**)&dev_max_clique, N * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+        goto Error;
+    }
+    cudaStatus = cudaMemcpyToSymbol(d_n, &neighbours[0], sz * sizeof(int));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaNeightMemCpyToSymbol failed! %s \n", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    parallel_clique(degrees, neighbours, indexes, tmp, d_best_size, dev_max_clique);
+    cudaStatus = parallel_clique(degrees, neighbours, indexes, tmp, d_best_size, dev_max_clique);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cuda failed :(( failed! %s", cudaGetErrorString(cudaStatus));
+        goto Error;
+    }
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     std::chrono::duration<float, std::milli> ms = end - begin;
     
-    printf("\n clique seq lunga %d: \n", d_best_size);
-    thrust::copy(dev_max_clique.begin(), dev_max_clique.begin()+d_best_size, std::ostream_iterator<int>(std::cout, "--> "));
-    /*for (int i = 0; i < d_best_size; i++) {
-        printf("%d -> ", dev_max_clique[i]);
-    }*/
+    printf("\n clique rec lunga %d: \n", d_best_size);
+
+    cudaStatus = cudaMemcpy(max_clique, dev_max_clique, d_best_size * sizeof(int), cudaMemcpyDeviceToHost);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cuda memcpyfromsymbol maxclique failed\n");
+        return cudaStatus;
+    }
+    for (int i = 0; i < d_best_size; i++) {
+        printf("%d -> ", max_clique[i]);
+    }
     std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
+Error:
+    cudaFree(dev_max_clique);
+    cudaFree(d_n);
+    free(max_clique);
     return cudaStatus;
 }
 
