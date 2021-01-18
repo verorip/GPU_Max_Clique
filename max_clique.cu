@@ -16,8 +16,8 @@
 #include <thrust/execution_policy.h>
 #include "device_functions.h"
 
-constexpr int N = 500000;
-constexpr int RATE = 2;
+constexpr int N = 50;
+constexpr int RATE = 80;
 
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
 constexpr int flag = 1;
@@ -316,10 +316,17 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
         i++;
     }
 
-    if (tmp_index > best_size) {
-        best_size = tmp_index;
-        if(count >0)
+    if (tmp_index >= best_size) {
+        
+        if (count > 0) {
             tmp[tmp_index] = intersection_local[i];
+            tmp_index++;
+            best_size = tmp_index;
+        }
+        else {
+            best_size = tmp_index;
+        }
+            
         cudaStream_t s;
         cudaStatus = cudaStreamCreate(&s);
         if (cudaStatus != cudaSuccess) {
