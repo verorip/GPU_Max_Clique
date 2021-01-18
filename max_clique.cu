@@ -16,10 +16,10 @@
 #include <thrust/execution_policy.h>
 
 
-constexpr int N = 20000;
-constexpr int RATE = 2;
+constexpr int N = 60;
+constexpr int RATE = 60;
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
-constexpr int flag = 2;
+constexpr int flag = 1;
 
 
 
@@ -227,9 +227,9 @@ int main() {
 void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, thrust::host_vector<int>& intersection, const std::vector<int>& indexes, std::array<int, N>& tmp, int &best_size, int tmp_index, int current, thrust::device_vector<int>& to_ret){
     //std::deque<int> inters_local;
     thrust::host_vector<int>::iterator r;
-    thrust::host_vector<int> intersection_local(degrees[current]<=intersection.size()? degrees[current] : intersection.size(), -1);
+    thrust::host_vector<int> intersection_local(degrees[current]<=intersection.size()-1? degrees[current] : intersection.size()-1, -1);
     if (tmp_index > 1) {
-        r=thrust::set_intersection(intersection.begin(), intersection.end(), neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current], intersection_local.begin());
+        r=thrust::set_intersection(intersection.begin()+1, intersection.end(), neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current], intersection_local.begin());
     }
     else {
         //inters_local = std::deque<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
@@ -239,7 +239,7 @@ void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& nei
     int i = 0;
     //int d_t = thrust::distance(intersection_local.begin(),r);
     int d = r - intersection_local.begin();
-    while (i<d && d + tmp_index > best_size) {
+    while (i<d && d - i + tmp_index > best_size) {
 
         //crt = intersection_local[i];
         tmp[tmp_index] = intersection_local[i];
