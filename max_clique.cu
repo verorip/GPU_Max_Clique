@@ -16,14 +16,14 @@
 #include <thrust/execution_policy.h>
 #include "device_functions.h"
 
-constexpr int N = 50;
-constexpr int RATE = 80;
+constexpr int N = 20000;
+constexpr int RATE = 1;
 
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
-constexpr int flag = 1;
+constexpr int flag = 2;
 
 
-__constant__ int a[N];
+__device__ int dev_a[N];
 __device__ int d_count;
 __device__ int d_n[N*N];
 
@@ -97,7 +97,7 @@ void seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbou
     }
 }
 
-__host__ std::vector<int> create_graph(std::vector<int>& degrees, int MaxNeightbours) {
+std::vector<int> create_graph(std::vector<int>& degrees, int MaxNeightbours) {
     std::vector<int> temp_neighbours(N * MaxNeightbours);
 
     int sizeOfN = 0;
@@ -147,14 +147,7 @@ int main() {
     //sizes per le malloc
     constexpr int MaxNeightbours = N;
     srand((unsigned)time(NULL));
-    //printf("max vicini %d\n", MaxNeightbours);
-
     
-
-    //serve eprchè non so la dimensione, quindi ne faccio una amsisma poi accorcio
-    //temp_neightbours è usato con dimensione NxN
-    
-
     std::vector<int> degrees(N);
 
     int best_size = 0;
@@ -201,13 +194,16 @@ int main() {
     if (flag <= 1) {
         printf("\nInizio il sequenziale:\n");
         seq_clique(degrees, neighbours, indexes, max_clique_seq, tmp_max_clique_seq, best_size);
-        printf("\n clique seq lunga %d: \n", best_size);
-        for (int i = 0; i < best_size; i++) {
-            printf("--> %d", max_clique_seq[i]);
-        }
+        
+        
+        
     }
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     std::chrono::duration<float, std::milli> ms = end - begin;
+    printf("\n clique seq lunga %d: \n", best_size);
+    for (int i = 0; i < best_size; i++) {
+        printf("--> %d", max_clique_seq[i]);
+    }
     std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
 
     
@@ -233,7 +229,7 @@ __global__ void parall_intersection(int n, int m,int start, int* inters_local) {
     int idx = blockIdx.x;
     int idy = threadIdx.x;
     if (idx < n && idy < m) {
-        int inter = a[idx];
+        int inter = dev_a[idx];
         int lcl_n= d_n[start+idy];
         if (inter == lcl_n) {
             int i = atomicAdd(&d_count, 1);
@@ -251,7 +247,7 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
     int min = std::min(sz, degrees[current]);
     if (tmp_index > 1) {
         int* dev_c;
-        cudaStatus = cudaMemcpyToSymbol(a, &intersection[int_start], sz * sizeof(int));
+        cudaStatus = cudaMemcpyToSymbol(dev_a, &intersection[int_start], sz * sizeof(int));
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "cudaMemCpyToSymbol failed! %s \n", cudaGetErrorString(cudaStatus));
             return cudaStatus;
@@ -316,7 +312,7 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
         i++;
     }
 
-    if (tmp_index >= best_size) {
+    if (tmp_index > best_size || (count>0 && tmp_index+1>best_size)) {
         
         if (count > 0) {
             tmp[tmp_index] = intersection_local[i];
@@ -399,7 +395,7 @@ cudaError_t clique_launcher(std::vector<int>& degrees, std::vector<int>& neighbo
         return cudaStatus;
     }
     for (int i = 0; i < d_best_size; i++) {
-        printf("%d -> ", max_clique[i]);
+        printf("--> %d ", max_clique[i]);
     }
     std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
 Error:
