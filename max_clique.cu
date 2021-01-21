@@ -16,8 +16,8 @@
 #include <thrust/execution_policy.h>
 #include "device_functions.h"
 
-constexpr int N = 20000;
-constexpr int RATE = 1;
+constexpr int N = 1000;
+constexpr int RATE = 50;
 
 // flag =0 solo sequenziale, flag =1 entrambi, flag >1 solo parallelo
 constexpr int flag = 2;
@@ -262,7 +262,16 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
             fprintf(stderr, "Cudamalloc failed!");
             return cudaStatus;
         }
-        parall_intersection <<<sz, degrees[current] >>> (sz,
+        int n_threads = 32;
+        if (degrees[current] % 32 == 0) {
+            n_threads = degrees[current];
+        }
+        else
+        {
+            n_threads = degrees[current] + (32 - (degrees[current] % 32));
+        }
+        //std::cout << n_threads << "  " << degrees[current] << "\n";
+        parall_intersection <<<sz, n_threads>>> (sz,
             degrees[current],
             indexes[current],
             dev_c);
