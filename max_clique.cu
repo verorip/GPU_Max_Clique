@@ -119,6 +119,8 @@ std::vector<int> create_graph(std::vector<int>& degrees, int MaxNeightbours) {
             }
         }
     }
+
+    //popolo gli array che definiscono grado e indice della lista di adiacenza
     std::vector <int> to_ret(sizeOfN);
     int counter = 0;
     int count = 0, current = 0, currentNode = 0;
@@ -148,13 +150,15 @@ int main() {
     constexpr int MaxNeightbours = N;
     srand((unsigned)time(NULL));
     
+    //vettore che indica il grado di un nodo
     std::vector<int> degrees(N);
 
     int best_size = 0;
 
+    //creo il grafo e lo salvo in una lista di adiacenza
     std::vector<int> neighbours= create_graph(degrees, MaxNeightbours);
     
-
+    //creao un array per gli inidici per la lista di adiacenza
     std::vector<int> indexes(N);
     indexes[0] = 0;
     int sum = degrees[0];
@@ -190,13 +194,10 @@ int main() {
     std::cout << '\n';*/
 
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    
+    //sequenziale
     if (flag <= 1) {
         printf("\nInizio il sequenziale:\n");
-        seq_clique(degrees, neighbours, indexes, max_clique_seq, tmp_max_clique_seq, best_size);
-        
-        
-        
+        seq_clique(degrees, neighbours, indexes, max_clique_seq, tmp_max_clique_seq, best_size);    
     }
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     std::chrono::duration<float, std::milli> ms = end - begin;
@@ -207,10 +208,7 @@ int main() {
     std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
 
     
-    //necessario epr fare memcpy su gpu
-    for (int i = 0; i < N; i++) {
-        tmp_max_clique_seq[i] = -1;
-    }
+    
     
     
     if (flag >= 1) {
@@ -232,6 +230,7 @@ __global__ void parall_intersection(int n, int m,int start, int* inters_local) {
         int inter = dev_a[idx];
         int lcl_n= d_n[start+idy];
         if (inter == lcl_n) {
+            //i corrisponde all'indice dell'array a cui devo andare a scrivere, incrementa SOLO se si trova un valore uguale in entrambi gli array
             int i = atomicAdd(&d_count, 1);
             inters_local[i] = inter;
         }
@@ -247,21 +246,28 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
     int min = std::min(sz, degrees[current]);
     if (tmp_index > 1) {
         int* dev_c;
+
+        //faccio la memcpytosymbol del vecchio insieme di intersezione
         cudaStatus = cudaMemcpyToSymbol(dev_a, &intersection[int_start], sz * sizeof(int));
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "cudaMemCpyToSymbol failed! %s \n", cudaGetErrorString(cudaStatus));
             return cudaStatus;
         }
+
+        //questo sarà il valore di lunghezza dell'array
         cudaStatus = cudaMemcpyToSymbol(d_count, &count, sizeof(int));
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "cudaMemCpyToSymbol2 failed! %s \n", cudaGetErrorString(cudaStatus));
             return cudaStatus;
         }
+
+        //questo è l'array che conterrà la nuova intersezione
         cudaStatus = cudaMalloc((void**)&dev_c, min * sizeof(int));
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "Cudamalloc failed!");
             return cudaStatus;
         }
+        //calcolo il numero di thread in modo sia un multiplo di 32
         int n_threads = 32;
         if (degrees[current] % 32 == 0) {
             n_threads = degrees[current];
@@ -275,6 +281,7 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
             degrees[current],
             indexes[current],
             dev_c);
+
         // Check for any errors launching the kernel
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) {
@@ -290,14 +297,18 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
             return cudaStatus;
         }
 
+        //estraggo il valore che mi dice la lunghezza dell'insieme intersezione
         cudaStatus = cudaMemcpyFromSymbol(&count, d_count, sizeof(int));
         if (cudaStatus != cudaSuccess) {
             fprintf(stderr, "cudaMemCpyFROMSymbol failed! %s \n", cudaGetErrorString(cudaStatus));
             return cudaStatus;
         }
+
+        //SE l'inisieme non è vuoto
         if (count > 0) {
             intersection_local = std::vector<int>(count);
 
+            //copio l'insieme intersezione su host
             cudaStatus = cudaMemcpy(&intersection_local[0], dev_c, count * sizeof(int), cudaMemcpyDeviceToHost);
             if (cudaStatus != cudaSuccess) {
                 fprintf(stderr, "cudaMemCpyFROMSymbol2 failed!\n %s", cudaGetErrorString(cudaStatus));
@@ -311,8 +322,11 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
         count = intersection_local.size();
     }
     int i=0;
+
+    //controllo del while con cut-off
     while (i<count-1  && count + tmp_index - i > best_size) {
         
+        //estraggo il primo nodo dall'insieme intersezione
         tmp[tmp_index] = intersection_local[i];
         cudaStatus = rec_par_clique(degrees, neighbours, i+1, intersection_local, indexes, tmp, best_size, tmp_index + 1, intersection_local[i], to_ret);
         if (cudaStatus != cudaSuccess) {
@@ -321,6 +335,7 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
         i++;
     }
 
+    //controllo che la lunghezza della cricca trovata sia maggiore della precedente
     if (tmp_index > best_size || (count>0 && tmp_index+1>best_size)) {
         
         if (count > 0) {
@@ -331,7 +346,7 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
         else {
             best_size = tmp_index;
         }
-            
+        //credo uno stream S e avvio una copia asincrona
         cudaStream_t s;
         cudaStatus = cudaStreamCreate(&s);
         if (cudaStatus != cudaSuccess) {
@@ -347,6 +362,8 @@ cudaError_t rec_par_clique(std::vector<int>& degrees, std::vector<int>& neighbou
 cudaError_t parallel_clique(std::vector<int>& degrees, std::vector<int>& neighbours, std::vector<int>& indexes, std::array<int, N>& tmp, int& best_size, int*  to_ret) {
     best_size = 0;
     cudaError_t cudaStatus = cudaSuccess;
+
+    //faccio partire la ricerca da ogni nodo
     for (int i = 0; i < N; i++) {
         tmp[0] = i;
         std::vector<int>  d = std::vector<int>(0);
@@ -375,12 +392,16 @@ cudaError_t clique_launcher(std::vector<int>& degrees, std::vector<int>& neighbo
     }
     int* dev_max_clique, *max_clique;
     int sz = (int)neighbours.size();
+
+    //faccio malloc e cudamalloc per l'array che conterrà la max clique
     max_clique=(int*)malloc(N * sizeof(int));
     cudaStatus = cudaMalloc((void**)&dev_max_clique, N * sizeof(int));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed!");
         goto Error;
     }
+
+    //salvo la lista di adiacenza su device
     cudaStatus = cudaMemcpyToSymbol(d_n, &neighbours[0], sz * sizeof(int));
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaNeightMemCpyToSymbol failed! %s \n", cudaGetErrorString(cudaStatus));
@@ -388,6 +409,7 @@ cudaError_t clique_launcher(std::vector<int>& degrees, std::vector<int>& neighbo
     }
 
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    //avvio algoritmo parallelo
     cudaStatus = parallel_clique(degrees, neighbours, indexes, tmp, d_best_size, dev_max_clique);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cuda failed :(( failed! %s", cudaGetErrorString(cudaStatus));
@@ -398,6 +420,7 @@ cudaError_t clique_launcher(std::vector<int>& degrees, std::vector<int>& neighbo
     
     printf("\n clique rec lunga %d: \n", d_best_size);
 
+    //copio la max clique su Host
     cudaStatus = cudaMemcpy(max_clique, dev_max_clique, d_best_size * sizeof(int), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cuda memcpyfromsymbol maxclique failed\n");
