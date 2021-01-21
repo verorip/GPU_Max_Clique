@@ -94,6 +94,8 @@ void seq_clique(const std::vector<int> &degrees, const std::vector<int>&neighbou
 }
 
 __host__ std::vector<int> create_graph(std::vector<int>& degrees, int MaxNeightbours) {
+
+    //creo il grafo e salvo su una lista di adiacenza
     std::vector<int> temp_neighbours(N * MaxNeightbours);
 
     int sizeOfN = 0;
@@ -115,6 +117,8 @@ __host__ std::vector<int> create_graph(std::vector<int>& degrees, int MaxNeightb
             }
         }
     }
+
+    //popolo il vettore dei gradi dei nodi
     std::vector <int> to_ret(sizeOfN);
     int counter = 0;
     int count = 0, current = 0, currentNode = 0;
@@ -150,14 +154,15 @@ int main() {
     //serve eprchè non so la dimensione, quindi ne faccio una amsisma poi accorcio
     //temp_neightbours è usato con dimensione NxN
     
-
+    //vettore dei gradi
     std::vector<int> degrees(N);
 
     int best_size = 0;
 
+    //creo grafo e lo salvo su una lista di adiacenza
     std::vector<int> neighbours= create_graph(degrees, MaxNeightbours);
     
-
+    //popolo il vettore di indici per la lista di adiacenza
     std::vector<int> indexes(N);
     indexes[0] = 0;
     int sum = degrees[0];
@@ -195,6 +200,7 @@ int main() {
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     
     if (flag <= 1) {
+        //lancio il sequenziale
         printf("\nInizio il sequenziale:\n");
         seq_clique(degrees, neighbours, indexes, max_clique_seq, tmp_max_clique_seq, best_size);
         printf("\n clique seq lunga %d: \n", best_size);
@@ -206,12 +212,6 @@ int main() {
     std::chrono::duration<float, std::milli> ms = end - begin;
     std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
 
-    
-    //necessario epr fare memcpy su gpu
-    for (int i = 0; i < N; i++) {
-        tmp_max_clique_seq[i] = -1;
-    }
-    
     
     if (flag >= 1) {
         printf("\nInizio il parallelo:\n");
@@ -229,26 +229,29 @@ void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& nei
     thrust::host_vector<int>::iterator r;
     thrust::host_vector<int> intersection_local(degrees[current]<=intersection.size()-1? degrees[current] : intersection.size()-1, -1);
     if (tmp_index > 1) {
+        //lancio set_intersection quindi verrà lanciaot un kernel
         r=thrust::set_intersection(intersection.begin()+1, intersection.end(), neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current], intersection_local.begin());
     }
     else {
-        //inters_local = std::deque<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
+        //questo else è solo eseguito al primo passo, perchè l'intersezione è la lista dei vicini del nodo corrente
         intersection_local = thrust::host_vector<int>(neighbours.begin() + indexes[current], neighbours.begin() + indexes[current] + degrees[current]);
         r = intersection_local.end();
     }
     int i = 0;
-    //int d_t = thrust::distance(intersection_local.begin(),r);
     int d = r - intersection_local.begin();
+
+    //controllo while con cut-off
     while (i<d && d - i + tmp_index > best_size) {
 
-        //crt = intersection_local[i];
         tmp[tmp_index] = intersection_local[i];
         rec_par_clique(degrees, neighbours, intersection_local, indexes, tmp, best_size, tmp_index + 1, intersection_local[i], to_ret);
         i++;
     }
 
+    //controllo se dimensione maggiore 
     if (tmp_index > best_size) {
         best_size = tmp_index;
+        //creo un vettore device e faccio la copia salvando la clique massima
         thrust::device_vector<int> t(tmp.begin(), tmp.begin()+tmp_index);
         thrust::copy(thrust::device, t.begin(), t.end(), to_ret.begin());
     }
@@ -256,8 +259,10 @@ void rec_par_clique(const std::vector<int>& degrees, const std::vector<int>& nei
 
 void parallel_clique(const std::vector<int>& degrees, const std::vector<int>& neighbours, const std::vector<int>& indexes, std::array<int, N>& tmp, int& best_size, thrust::device_vector<int>&  to_ret) {
     best_size = 0;
+    //faccio aprtire la ricerca da ogni nodo del grafo
     for (int i = 0; i < N; i++) {
         tmp[0] = i;
+        //vettore intersezione iniziale
         thrust::host_vector<int>  d = thrust::host_vector<int>(0);
         rec_par_clique(degrees, neighbours, d, indexes, tmp, best_size, 1, i, to_ret);
 
@@ -275,17 +280,20 @@ cudaError_t clique_launcher(const std::vector<int>& degrees, const std::vector<i
     for (int i = 0; i < N; i++) {
         tmp[i] = -1;
     }
+
+    //vettore device che contiene max clique
     thrust::device_vector<int> dev_max_clique(N, -1);
+
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+    //lancio algoritmo parallelo
     parallel_clique(degrees, neighbours, indexes, tmp, d_best_size, dev_max_clique);
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     std::chrono::duration<float, std::milli> ms = end - begin;
     
     printf("\n clique seq lunga %d: \n", d_best_size);
+    //estraggo la maxclique facendola uscire direttamente su std::cout
     thrust::copy(dev_max_clique.begin(), dev_max_clique.begin()+d_best_size, std::ostream_iterator<int>(std::cout, "--> "));
-    /*for (int i = 0; i < d_best_size; i++) {
-        printf("%d -> ", dev_max_clique[i]);
-    }*/
     std::cout << "\n\nTime difference = " << ms.count() << "[ms] " << ms.count() / 1000 << "[s] " << ms.count() / 60000 << "[m] " << std::endl;
     return cudaStatus;
 }
